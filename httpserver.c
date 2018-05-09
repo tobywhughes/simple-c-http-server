@@ -24,6 +24,7 @@ void reply_to_request(int error);
 int parse_line(char * buf);
 int parse_post(char * buf);
 int parse_get(char * buf);
+int parse_head(char * buf);
 int parse_host(char * buf);
 int parse_user_agent(char * buf);
 int parse_accept(char * buf);
@@ -43,10 +44,12 @@ char reply[256];
 char * types[20];
 char * content_types[20];
 char * languages[10];
-char connection[64];
+char connection[64] = "keep-alive";
 bool started = false;
 char request_type[16];
 char content_length[16] = "0";
+bool post_body_flag = false;
+char post_body[MAXLINE];
 
 int main(int argc, char *argv[])
 {
@@ -115,7 +118,7 @@ void * client_request(void *arg)
 	uint8_t line_count = 0;
 	bool buffer_flag = false;
 	char line_buffer[512] = {'\0'};
-	char test_buffer[512];
+	char test_buffer[512] = {'\0'};
 	char holder[512];
 	while (1) {
 		strcpy(test_buffer, line_buffer);
@@ -136,27 +139,34 @@ void * client_request(void *arg)
 			}
 			else
 			{
-				int put_increment = 0;
-				token = strtok(buf, "\r\n");
+				int post_increment = 0;
 				char temp_[512];
-				strcpy(temp_, token);
-				if(temp_[0] == 'P' && temp_[1] == 'U' && temp_[2] == 'T')
+				strcpy(temp_, buf);
+				if(temp_[0] == 'P' && temp_[1] == 'O' && temp_[2] == 'S' && temp_[3] == 'T')
 				{
-					put_increment++;
+					printf("~~~POST~~~");
+					post_increment++;
 				}
+				token = strtok(buf, "\r\n");
 				lines[line_count] = token;
 				line_count++;
-				while (token != NULL || put_increment >= 0)
+				char * temp2;
+				while (token != NULL || post_increment >= 0)
 				{
-					char temp[512];
-					char * temp2;
 					temp2 = strtok(NULL, "");
-					if(double_return(temp2) == true)
+					if (temp2 == NULL)
 					{
-						printf("#########TEST");
 						lines[line_count] = NULL;
 						token = NULL;
-						put_increment--;
+						post_increment--;
+					}
+					else if(double_return(temp2) == true)
+					{
+						//printf("#########TEST");
+						lines[line_count] = NULL;
+						token = NULL;
+						post_increment--;
+						strtok(temp2, "\n");
 					}
 					else
 				       	{
@@ -209,7 +219,7 @@ bool double_return(char * buf)
 //	printf("@@%s\n", buf_test);
 //	printf("%d", buf_test[0]);
 //	printf("%d", buf_test[1]);
-	if(buf_test[0] == '\n' && buf_test[1] == '\r')
+	if(buf_test[0] == '\n' && buf_test[1] == '\r' && buf_test[2] == '\n')
 	{
 		return true;
 	}
@@ -230,12 +240,12 @@ void reply_to_request(int error)
 				i++;
 			}
 		}
-		if(access(filename, F_OK) == -1)
+		if(access(filename, F_OK) == -1 && (strcmp(request_type, "GET") == 0 || strcmp(request_type, "HEAD") == 0))
 		{
 			error = 404;
 		}
 	}
-	if(error == -1 && started == true)
+	if(error == -1 && started == true && (strcmp(request_type, "GET") == 0 || strcmp(request_type, "HEAD") == 0))
 	{
 		char html[512];
 		FILE *file = fopen(filename, "rb");
@@ -245,7 +255,34 @@ void reply_to_request(int error)
 		rewind(file);
 		fread(html, 512, 1, file);
 		html[len] = '\0';
-		fclose(file);	
+		fclose(file);
+		if(strcmp(request_type, "GET") == 0)
+		{
+			sprintf(reply, "HTTP/1.0 200 OK\r\nServer: Simple-C-Server/0.1\r\nContent-Type: text/html\r\nContent-Language: en-US\r\nConnection: %s\r\nContent-Length: %d\r\n\r\n%s", connection, strlen(html), html);
+		}
+		else if(strcmp(request_type, "HEAD") == 0)
+		{
+			sprintf(reply, "HTTP/1.0 200 OK\r\nServer: Simple-C-Server/0.1\r\nContent-Type: text/html\r\nContent-Language: en-US\r\nConnection: %s\r\nContent-Length: %d\r\n\r\n", connection, strlen(html));
+		}
+	}
+	else if(error == -1 && started == true && strcmp(request_type, "POST") == 0)
+	{
+		char input_string[20] = "<b>Post Data: </b>";
+		char link_back[100] = "<br><a href=\"/index.html\">Back to the main page!</a>";
+		FILE *file = fopen(filename, "wb");
+		fwrite(input_string, strlen(input_string), 1, file);
+		fwrite(post_body, strlen(post_body), 1, file);
+		fwrite(link_back, strlen(link_back), 1, file);
+		fclose(file);
+		char html[512];
+		FILE *filer = fopen(filename, "rb");
+	       	fseek(filer, 0, SEEK_END);
+		int len = ftell(filer);
+		printf("###%d", len);
+		rewind(filer);
+		fread(html, 512, 1, filer);
+		html[len] = '\0';
+		fclose(filer);	
 		sprintf(reply, "HTTP/1.0 200 OK\r\nServer: Simple-C-Server/0.1\r\nContent-Type: text/html\r\nContent-Language: en-US\r\nConnection: %s\r\nContent-Length: %d\r\n\r\n%s", connection, strlen(html), html);
 	}
 	else if (error == 404)
@@ -275,11 +312,23 @@ void reply_to_request(int error)
 int parse_line(char * buf)
 {
 	int error = 0;
+	if(buf != NULL && post_body_flag == true)
+	{
+		printf("GRABBING POST BODY\n");
+		strcpy(post_body, buf);
+		return 200;
+	}
 	printf("PARSING LINE: %s\n", buf);
 	char passbuf[256];
 	if(buf == NULL)
 	{
+		if(post_body_flag == false && strcmp(request_type, "POST") == 0)
+		{
+			post_body_flag = true;
+			return 200;		
+		}
 		error = -1;
+		post_body_flag = false;
 		printf("REQUEST ENDED WITH ERROR: %d\n", error);
 		return error;
 	}
@@ -294,6 +343,16 @@ int parse_line(char * buf)
 		}
 		started = true;
 		error = parse_get(passbuf);
+		return error;
+	}
+	if (strcmp(token, "HEAD") == 0)
+	{
+		if (started == true)
+		{
+			return 400;
+		}
+		started = true;
+		error = parse_head(passbuf);
 		return error;
 	}
 	if (strcmp(token, "POST") == 0)
@@ -349,6 +408,11 @@ int parse_line(char * buf)
 		printf("This server does not currently support security upgrade requests. Request ignored.");
 		return 200;		
 	}
+	else if (strcmp(token, "Cache-Control:")==0)
+	{
+		printf("This server does not currently support cache-control. Request ignored.");
+		return 200;		
+	}
 	return 400;
 }
 
@@ -357,6 +421,32 @@ int parse_get(char * buf)
 	int error = 200;
 	printf("FULL COMMAND: %s\n", buf);
 	strcpy(request_type, "GET");
+	printf("COMMAND: %s\n", strtok(buf, " "));
+	strcpy(filename, strtok(NULL, " "));
+	printf("FILENAME: %s\n", filename);
+	strcpy(version_name, strtok(NULL, "\\"));
+	printf("VERSION NAME: %s\n", version_name);
+	if(strcmp(version_name, "HTTP/1.0") != 0)
+	{
+		if(strcmp(version_name, "HTTP/1.1") == 0)
+		{
+			printf("1.1 Requested. This server only supports 1.0. Converted to 1.0");
+			strcpy(version_name, "HTTP/1.0");
+		}
+		else 
+		{
+			printf("Invalid version name. Please use HTTP/1.0.\n");
+			error = 505;
+		}
+	}
+	return error;
+}
+
+int parse_head(char * buf)
+{
+	int error = 200;
+	printf("FULL COMMAND: %s\n", buf);
+	strcpy(request_type, "HEAD");
 	printf("COMMAND: %s\n", strtok(buf, " "));
 	strcpy(filename, strtok(NULL, " "));
 	printf("FILENAME: %s\n", filename);
