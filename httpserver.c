@@ -1,3 +1,8 @@
+//Tobias Hughes
+////Simple C HTTP Server
+//CS 436
+
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -17,6 +22,8 @@
 #define MAXLINE	516
 
 
+
+//Prototypes
 void *client_request(void *arg);
 bool buffer_is_valid(char * buf);
 bool double_return(char * buf);
@@ -34,6 +41,8 @@ int parse_connection_param(char * buf);
 int parse_referer(char * buf);
 int parse_content_length(char * buf);
 
+
+//Global Variables
 const int backlog = 4;
 char filename[128];
 char version_name[128];
@@ -51,6 +60,8 @@ char content_length[16] = "0";
 bool post_body_flag = false;
 char post_body[MAXLINE];
 
+
+//Sets up socket connection
 int main(int argc, char *argv[])
 {
 
@@ -104,6 +115,9 @@ int main(int argc, char *argv[])
 
 }
 
+/*
+ * Takes HTTP request as input and sends back an HTTP 1.0 Response.
+ */
 void * client_request(void *arg)
 {
 	int connfd;
@@ -120,25 +134,44 @@ void * client_request(void *arg)
 	char line_buffer[512] = {'\0'};
 	char test_buffer[512] = {'\0'};
 	char holder[512];
+	int post_enter_increment = 0;
+
+	//Loop that reads in HTTP Input
 	while (1) {
+
+		//Saves current values of buffers and resets client's buffer
 		strcpy(test_buffer, line_buffer);
 		memset(buf, '\0', MAXLINE);
 		line_count = 0;
+
+		//Reads in client http message
 		if ((n = read(connfd, buf, MAXLINE)) == 0)
 			return;
+		
+		//Returns value to buffer
 		strcpy(line_buffer, test_buffer);
+
+		//Concatenates recent buffer input
 		strcat(line_buffer, buf);
+
+		//If A double <cr><lf> is found, that is the request
 		if(buffer_is_valid(line_buffer) == true)
 		{
+			//Replaces buffer with entire saved buffer (for things like telnet that are entered line by line)
 			strcpy(buf, line_buffer);
 			printf("FULL MESSAGE: %s\n\n", buf);
+
+			//If the message starts as nothing, sends in null token and returns back to client input
 			if (buf[0] == '\r' && buf[1] == '\n')
 			{
 				token = NULL;
 				error = parse_line(token);
 			}
+
+			//Otherwise, parse HTTP input
 			else
 			{
+				//Checks for POST. If it is a post, data might come after the double <cr><lf>
 				int post_increment = 0;
 				char temp_[512];
 				strcpy(temp_, buf);
@@ -147,19 +180,26 @@ void * client_request(void *arg)
 					printf("~~~POST~~~");
 					post_increment++;
 				}
+
+				//Parses first line
 				token = strtok(buf, "\r\n");
 				lines[line_count] = token;
 				line_count++;
 				char * temp2;
+
+				//Continues to parse each line based on <cr><lf>
 				while (token != NULL || post_increment >= 0)
 				{
 					temp2 = strtok(NULL, "");
+
+					//If the line is null, add a null to the line buffer
 					if (temp2 == NULL)
 					{
 						lines[line_count] = NULL;
 						token = NULL;
 						post_increment--;
 					}
+					//If it is a double carriage return, treat that as a null
 					else if(double_return(temp2) == true)
 					{
 						//printf("#########TEST");
@@ -168,6 +208,7 @@ void * client_request(void *arg)
 						post_increment--;
 						strtok(temp2, "\n");
 					}
+					//Otherwise simply parse line
 					else
 				       	{
 						token = strtok(temp2, "\r\n");
@@ -176,9 +217,13 @@ void * client_request(void *arg)
 					line_count++;
 					printf("#Token: %s\n", token);
 				}
+
+				//Actually parse input line by line building up request
 				for(int i = 0; i < line_count; i++)
 				{
 					error = parse_line(lines[i]);
+
+					//If an error causes it to leave early, run cleanup and then exit to reply
 					if(error != 200 && error != -1)
 					{
 					 	parse_line(NULL);
@@ -187,7 +232,9 @@ void * client_request(void *arg)
 					
 				}
 			}
-			printf("ERROR: %d\n", error);
+
+			//Builds reply and sends it to http client
+			printf("STATUS: %d\n", error);
 			reply_to_request(error);
 			started = false;
 			write(connfd, reply, strlen(reply));
@@ -201,6 +248,8 @@ void * client_request(void *arg)
 	}
 }
 
+
+//Checks for a double <cr><lf>
 bool buffer_is_valid(char * buf)
 {
 	char buf_use[MAXLINE];
@@ -212,13 +261,11 @@ bool buffer_is_valid(char * buf)
 	return false;
 }
 
+//Checks for double <cr><lf> in specific case inside line parsing
 bool double_return(char * buf)
 {
 	char buf_test[MAXLINE];
 	strcpy(buf_test, buf);
-//	printf("@@%s\n", buf_test);
-//	printf("%d", buf_test[0]);
-//	printf("%d", buf_test[1]);
 	if(buf_test[0] == '\n' && buf_test[1] == '\r' && buf_test[2] == '\n')
 	{
 		return true;
@@ -226,11 +273,14 @@ bool double_return(char * buf)
 	return false;
 }
 
+//Builds HTTP response message
 void reply_to_request(int error)
 {
 	printf("\n#######\nRESPONSE\n#######\n");
+
 	if(error == -1)
 	{
+		//Checks if file exists
 		if(filename[0] == '/')
 		{
 			int i = 0;
@@ -240,11 +290,14 @@ void reply_to_request(int error)
 				i++;
 			}
 		}
+		//Unless it is a POST, if the file doesn't exist, 404 error
 		if(access(filename, F_OK) == -1 && (strcmp(request_type, "GET") == 0 || strcmp(request_type, "HEAD") == 0))
 		{
 			error = 404;
 		}
 	}
+
+	//If the file does exist and it is not a post, retrieve the file and headers and return them (only headers for HEAD)
 	if(error == -1 && started == true && (strcmp(request_type, "GET") == 0 || strcmp(request_type, "HEAD") == 0))
 	{
 		char html[512];
@@ -265,6 +318,8 @@ void reply_to_request(int error)
 			sprintf(reply, "HTTP/1.0 200 OK\r\nServer: Simple-C-Server/0.1\r\nContent-Type: text/html\r\nContent-Language: en-US\r\nConnection: %s\r\nContent-Length: %d\r\n\r\n", connection, strlen(html));
 		}
 	}
+
+	//If it is a post, create the file with post input and then return that new file
 	else if(error == -1 && started == true && strcmp(request_type, "POST") == 0)
 	{
 		char input_string[20] = "<b>Post Data: </b>";
@@ -285,23 +340,33 @@ void reply_to_request(int error)
 		fclose(filer);	
 		sprintf(reply, "HTTP/1.0 200 OK\r\nServer: Simple-C-Server/0.1\r\nContent-Type: text/html\r\nContent-Language: en-US\r\nConnection: %s\r\nContent-Length: %d\r\n\r\n%s", connection, strlen(html), html);
 	}
+
+	//404 error - file not found
 	else if (error == 404)
 	{
 		char html[128] = "<h1>404 ERROR</h1><br><h3>We regret to inform you that your file does not exist. What a shame.</h3>";
 		sprintf(reply, "HTTP/1.0 404 NOT FOUND\r\nContent-Length: %ld\r\n\r\n%s", strlen(html), html);
 	}
+
+	//400 error - bad request
 	else if(error == 400)
 	{	
 		sprintf(reply, "HTTP/1.0 400 BAD REQUEST\r\nContent-Length: 0\r\n\r\n");
 	}
+
+	//406 error, not acceptable parameters
 	else if(error == 406)
 	{
 		sprintf(reply, "HTTP/1.0 406 NOT ACCEPTABLE\r\nContent-Length: 0\r\n\r\n");
 	}
+	
+	//505 error, version not supported (e.g. 2.0)
 	else if(error == 505)
 	{
 		sprintf(reply, "HTTP/1.0 505 HTTP VERSION NOT SUPPORTED\r\nContent-Length: 0\r\n\r\n");
 	}
+
+	//Otherwise, its just a 400 error
 	else
 	{
 		sprintf(reply, "HTTP/1.0 400 BAD REQUEST\r\nContent-Length: 0\r\n\r\n");
@@ -309,9 +374,11 @@ void reply_to_request(int error)
 	printf("%s\n", reply);
 }
 
+//Parses beginning of line and then sends it to the correct parsing function
 int parse_line(char * buf)
 {
 	int error = 0;
+	//If it is a post, grab post boody if the post body flag is not false and we are in a non-null line
 	if(buf != NULL && post_body_flag == true)
 	{
 		printf("GRABBING POST BODY\n");
@@ -320,13 +387,18 @@ int parse_line(char * buf)
 	}
 	printf("PARSING LINE: %s\n", buf);
 	char passbuf[256];
+
+	//If it is a null line, assume double <cr><lf> and parse accordingly
 	if(buf == NULL)
 	{
+		//If this is the first null and it is a post, prepare for psot body
 		if(post_body_flag == false && strcmp(request_type, "POST") == 0)
 		{
 			post_body_flag = true;
 			return 200;		
 		}
+
+		//Otherwise, just close out post body and assume end of input feed
 		error = -1;
 		post_body_flag = false;
 		printf("REQUEST ENDED WITH ERROR: %d\n", error);
@@ -335,8 +407,11 @@ int parse_line(char * buf)
 	strcpy(passbuf, buf);
 	char * token;
 	token = strtok(buf, " ");
+
+	//Parses GET
 	if (strcmp(token, "GET") == 0)
 	{
+		//Cannot start twice
 		if (started == true)
 		{
 			return 400;
@@ -345,8 +420,10 @@ int parse_line(char * buf)
 		error = parse_get(passbuf);
 		return error;
 	}
-	if (strcmp(token, "HEAD") == 0)
+	//Parses HEAD
+	else if (strcmp(token, "HEAD") == 0)
 	{
+		//Cannot start twice
 		if (started == true)
 		{
 			return 400;
@@ -355,8 +432,11 @@ int parse_line(char * buf)
 		error = parse_head(passbuf);
 		return error;
 	}
-	if (strcmp(token, "POST") == 0)
+
+	//Parses POST
+	else if (strcmp(token, "POST") == 0)
 	{
+		//Cannot start twice
 		if (started == true)
 		{
 			return 400;
@@ -365,6 +445,7 @@ int parse_line(char * buf)
 		error = parse_post(passbuf);
 		return error;
 	}
+
 	else if (strcmp(token, "Host:") == 0)
 	{
 		return parse_host(passbuf);
@@ -416,6 +497,9 @@ int parse_line(char * buf)
 	return 400;
 }
 
+/*
+ * Parses GET header. Checks for filename and proper version.
+ */
 int parse_get(char * buf)
 {
 	int error = 200;
@@ -426,6 +510,8 @@ int parse_get(char * buf)
 	printf("FILENAME: %s\n", filename);
 	strcpy(version_name, strtok(NULL, "\\"));
 	printf("VERSION NAME: %s\n", version_name);
+
+	//Allows 1.1 to be converted but returns error for 2.0
 	if(strcmp(version_name, "HTTP/1.0") != 0)
 	{
 		if(strcmp(version_name, "HTTP/1.1") == 0)
@@ -442,6 +528,9 @@ int parse_get(char * buf)
 	return error;
 }
 
+/*
+ * Parses HEAD header, checks for filename and version
+ */
 int parse_head(char * buf)
 {
 	int error = 200;
@@ -452,6 +541,7 @@ int parse_head(char * buf)
 	printf("FILENAME: %s\n", filename);
 	strcpy(version_name, strtok(NULL, "\\"));
 	printf("VERSION NAME: %s\n", version_name);
+	//Allos 1.1 to be converted but fails on 2.0
 	if(strcmp(version_name, "HTTP/1.0") != 0)
 	{
 		if(strcmp(version_name, "HTTP/1.1") == 0)
@@ -468,6 +558,9 @@ int parse_head(char * buf)
 	return error;
 }
 
+/*
+ * Parses POST header, checks for filename and version
+ */
 int parse_post(char * buf)
 {
 	int error = 200;
@@ -478,6 +571,7 @@ int parse_post(char * buf)
 	printf("FILENAME: %s\n", filename);
 	strcpy(version_name, strtok(NULL, "\\"));
 	printf("VERSION NAME: %s\n", version_name);
+	//Allows 1.1 version but returns error for 2.0
 	if(strcmp(version_name, "HTTP/1.0") != 0)
 	{
 		if(strcmp(version_name, "HTTP/1.1") == 0)
@@ -494,6 +588,7 @@ int parse_post(char * buf)
 	return error;
 }
 
+//Saves host value in hostname global
 int parse_host(char * buf)
 {
 	printf("$PARSING HOST~~ %s\n", buf);
@@ -503,6 +598,8 @@ int parse_host(char * buf)
 	return 200;
 }
 
+
+//Saves referer value in referer global
 int parse_referer(char * buf)
 {
 	printf("$PARSING REFERER~~ %s\n", buf);
@@ -512,6 +609,8 @@ int parse_referer(char * buf)
 	return 200;
 }
 
+
+//Saves content length in content length global
 int parse_content_length(char * buf)
 {
 	printf("$PARSING CONTENT LENGTH~~ %s\n", buf);
@@ -521,6 +620,8 @@ int parse_content_length(char * buf)
 	return 200;
 }
 
+
+//Saves user agent in user agent global
 int parse_user_agent(char * buf)
 {
 	printf("$PARSING USER AGENT~~ %s\n", buf);
@@ -530,6 +631,7 @@ int parse_user_agent(char * buf)
 	return 200;
 }
 
+//Grabs connection type, and forces keep-alive to be the type
 int parse_connection_param(char * buf)
 {
 	printf("$PARSING CONNECTION~~ %s\n", buf);
@@ -544,6 +646,7 @@ int parse_connection_param(char * buf)
 	return 200;
 }
 
+//Grabs accepted types and makes sure a legal mime tpye is present 
 int parse_accept(char * buf)
 {
 	printf("$NEGOTIATING ACCEPTED CONTENT TYPES~~ %s\n", buf);
@@ -586,6 +689,8 @@ int parse_accept(char * buf)
 	}
 }
 
+
+// Checks for content type and makes sure an applicable content type is present
 int parse_content_type(char * buf)
 {
 	printf("$NEGOTIATING CONTENT TYPES~~ %s\n", buf);
@@ -624,6 +729,8 @@ int parse_content_type(char * buf)
 	}
 }
 
+
+//Parses languages, and ensures that the language is US English
 int parse_languages(char * buf)
 {
 	printf("$NEGOTIATING LANGUAGES~~ %s\n", buf);
